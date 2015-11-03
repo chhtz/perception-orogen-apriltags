@@ -31,33 +31,47 @@ bool Task::configureHook()
 	// setting camera matrix and distortion matrix
 	frame_helper::CameraCalibration cal = _camera_calibration.get();
 
-        // apply scaling to calibration parameters
-        scaling = 1.0;
-        if(_scale_image.value() > 0.0 && _scale_image.value() != 1.0)
-            scaling = _scale_image.value();
-        if(scaling != 1.0)
-        {
-            cal.fx = scaling * cal.fx;
-            cal.fy = scaling * cal.fy;
-            cal.cx = scaling * cal.cx;
-            cal.cy = scaling * cal.cy;
-            cal.height = scaling * cal.height;
-            cal.width = scaling * cal.width;
-        }
+        cv::Size oldSize(cal.width, cal.height), newSize = oldSize;
+        cv::Mat_<double> camera_orig = (cv::Mat_<double>(3,3) <<
+                cal.fx, 0, cal.cx,
+                0, cal.fy, cal.cy,
+                0, 0, 1);
+        camera_dist = (cv::Mat_<double>(1,4) << cal.d0, cal.d1, cal.d2, cal.d3);
 
-	camera_k = (cv::Mat_<double>(3,3) << cal.fx, 0, cal.cx,
-                                            0, cal.fy, cal.cy,
-                                            0, 0, 1);
-	camera_dist = (cv::Mat_<double>(1,4) << cal.d0, cal.d1, cal.d2, cal.d3);
+        double scaling = _scale_image.value();
+        double alpha = _optimize_camera_matrix_alpha.value();
+        std::cout << "Configure AprilTask. scale = " << scaling << ", alpha = " << alpha << "; Original camera matrix:\n" << camera_orig << "\nDistortion: " << camera_dist;
+        // apply scaling to calibration parameters
+        if(scaling > 0.0 && scaling != 1.0)
+        {
+            newSize.width = oldSize.width * scaling;
+            newSize.height = oldSize.height * scaling;
+        }
+        if(alpha >= 0.0)
+        {
+            camera_k = cv::getOptimalNewCameraMatrix(camera_orig, camera_dist, oldSize, alpha, newSize);
+        }
+        else
+        {
+            camera_k = camera_orig;
+            if(scaling != 1.0)
+            {
+                camera_k(0,0) *= scaling;
+                camera_k(1,1) *= scaling;
+                camera_k(0,2) *= scaling;
+                camera_k(1,2) *= scaling;
+            }
+        }
+        std::cout << "\nNew camera matrix:\n" << camera_k << std::endl;
 
 	// setting immutable parameters
 	conf = _conf_param.get();
 
-	rvec.create(3,1,CV_64FC1);
-	tvec.create(3,1,CV_64FC1);
+	rvec.create(3,1);
+	tvec.create(3,1);
 
 	// Initialize the undistortion maps:
-	cv::initUndistortRectifyMap(camera_k, camera_dist, cv::Mat(), camera_k, cv::Size(cal.width, cal.height), CV_16SC2, undist_map1, undist_map2);
+	cv::initUndistortRectifyMap(camera_orig, camera_dist, cv::Mat(), camera_k, newSize, CV_16SC2, undist_map1, undist_map2);
 
 	// Initialize April-Detector library:
 	//set the apriltag family
@@ -106,7 +120,6 @@ bool Task::configureHook()
 	  
 	}
 	
-	
 	return true;
 }
 bool Task::startHook()
@@ -136,14 +149,6 @@ void Task::updateHook()
 		}
 		else
 			image = frame_helper::FrameHelper::convertToCvMat(*current_frame_ptr);
-
-                // scale image size
-                if(scaling != 1.0)
-                {
-                    cv::Mat image_scaled;
-                    cv::resize(image, image_scaled, cv::Size(), scaling, scaling);
-                    image = image_scaled;
-                }
 
 		// convert to grayscale and undistort both images
 		cv::Mat image_gray;

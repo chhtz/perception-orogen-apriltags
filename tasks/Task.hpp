@@ -50,12 +50,10 @@ namespace apriltags {
     apriltag_family_t *tf;
     apriltag_detector_t *td;
 
-    cv::Mat camera_k, camera_dist;
-    cv::Mat rvec, tvec;
+    cv::Mat_<double> camera_k, camera_dist;
+    cv::Mat_<double> rvec, tvec;
     // Maps for faster undistortion:
     cv::Mat undist_map1, undist_map2;
-    double scaling;
-
 
     RTT::extras::ReadOnlyPointer<base::samples::frame::Frame> out_frame_ptr;
 

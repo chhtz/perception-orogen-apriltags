@@ -40,6 +40,10 @@ task_context "Task" do
         .doc 'Write the image on the output_port'
     property("scale_image", "double", 1.0)
         .doc 'applies this scaling to the image and calibration parameters'
+    property("optimize_camera_matrix_alpha", "double", 1.0)
+        .doc 'If this is positive, it computes an optimal camera matrix according to cv::getOptimalNewCameraMatrix
+              alpha=1.0 means that all original pixels will be kept, alpha=0.0 means that only valid pixels will be passed to the detector.
+              For negative values, the camera matrix is kept (or scaled by scale_image).'
      
 
     #Input Ports
