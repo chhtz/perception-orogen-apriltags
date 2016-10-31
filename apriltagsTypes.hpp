@@ -8,6 +8,11 @@
  * which case you do not need this file
  */
 
+#include <base/Eigen.hpp>
+#include <vector>
+#include <base/Time.hpp>
+#include <frame_helper/Calibration.h>
+
 namespace apriltags {
 
 	enum family_t {TAG25H7, TAG25H9, TAG36H10, TAG36H11, TAG36ARTOOLKIT};
@@ -47,6 +52,33 @@ namespace apriltags {
       int id;
       double marker_size; //in meters  
    };
+
+    struct SingleTag
+    {
+        base::Vector2d corners[4];
+        int id;
+        bool operator<(const SingleTag& other) const { return id < other.id; }
+        base::Vector2d& operator[](size_t i) {return corners[i];}
+        const base::Vector2d& operator[](size_t i) const {return corners[i];}
+    };
+
+    struct TimedVectorOfTags// : public std::vector<SingleTag> // TODO why can't I inherit from std::vector?
+    {
+        typedef std::vector<SingleTag> Container;
+        base::Time time;
+        frame_helper::CameraCalibration calib;
+        Container tags;
+        void reserve(size_t size) { tags.reserve(size); }
+        void push_back(const SingleTag& tag) { tags.push_back(tag); }
+        const Container& operator*() const {return tags;}
+        const Container* operator->() const {return &tags;}
+        Container& operator*() {return tags;}
+        Container* operator->() {return &tags;}
+    };
+
+//    struct TimedVectorOfTags : public std::vector<SingleTag> { base::Time time; };
+////        std::vector<SingleTag> tags;
+//    };
 
 }
 

@@ -59,6 +59,9 @@ task_context "Task" do
 	.doc 'It contains a single calculated marker pose in respect to camera of a deteted visable marker'
     output_port("detected_corners", "std/vector<base::Vector2d>")
      	.doc 'Writes the camera calibration to be acessible to other components' 	
+    output_port("detected_corners_timed", "apriltags::TimedVectorOfTags")
+        .doc 'Writes the camera calibration to be acessible to other components'
+#    output_port("detected_corners_timed", "std/vector<apriltags::SingleTag>")
      	
 
     port_driven "image"

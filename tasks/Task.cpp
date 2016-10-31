@@ -179,8 +179,9 @@ void Task::updateHook()
 			int hamm_hist[hamm_hist_max];
 			memset(hamm_hist, 0, sizeof(hamm_hist));
 
-            //convert cv::Mat to image_u8_t
+			//convert cv::Mat to image_u8_t
 			//copying one row at once
+			// TODO this could be done by OpenCV
 			image_u8_t *im = image_u8_create(image_gray.cols, image_gray.rows);
 			for(int i=0; i < image_gray.rows; ++i)
 			{
@@ -194,9 +195,17 @@ void Task::updateHook()
 			double t2=tic();
 			double t_detect = t2-t1; t1=t2;
 
+			int numOfMarkers = zarray_size(detections);
 			//build the rbs_vector and draw detected markers
 			std::vector<base::samples::RigidBodyState> rbs_vector;
-			for (int i = 0; i < zarray_size(detections); i++)
+			rbs_vector.reserve(numOfMarkers);
+			TimedVectorOfTags timed_tags;
+			timed_tags.time = current_frame.time;
+			// Coordinates of corners are according to the undistorted camera:
+			timed_tags.calib = frame_helper::CameraCalibration(camera_k(0,0), camera_k(1,1), camera_k(0,2), camera_k(1,2), 0, 0, 0, 0,
+			                                                   image_gray.cols, image_gray.rows);
+			timed_tags.reserve(numOfMarkers);
+			for (int i = 0; i < numOfMarkers; i++)
 			{
 				apriltag_detection_t *det;
 				zarray_get(detections, i, &det);
@@ -216,8 +225,29 @@ void Task::updateHook()
 				base::samples::RigidBodyState rbs;
 				getRbs(rbs, size, det->p, camera_k, cv::Mat());
 				rbs.sourceFrame = getMarkerFrameName( det->id);
-				rbs.time = current_frame_ptr->time;
+				rbs.time = current_frame.time;
 				rbs_vector.push_back(rbs);
+
+				{
+					// this code does essentially the same as getRbs (using only low-level math),
+					// by using the homography which apriltag_detector already calculated
+					typedef Eigen::Matrix<double, 3, 3, Eigen::RowMajor> Mat3R;
+					Eigen::Map<const Mat3R> H(det->H->data); // homography matrix from apriltag_detector
+					Eigen::Matrix3d R, F;
+					Eigen::Vector3d t;
+					cv::cv2eigen(camera_k, F);
+					R=F.triangularView<Eigen::Upper>().solve(H); // apply inverse of the camera-matrix to H
+					R.col(1)=-R.col(1); // mirror the y-axis
+					double h0_n=R.col(0).norm(), h1_n=R.col(1).norm();
+					t=R.col(2)*(_marker_size.get()/(h0_n+h1_n));
+					R.col(0)=R.col(0)/h0_n;
+					R.col(1)=R.col(1)/h1_n;
+					R.col(2)=R.col(0).cross(R.col(1));
+
+					if (!conf.quiet)
+						std::cout << "H:\n" << H << "\nF:\n" << F << "\nR:\n" << R << "\nt.transpose(): " << t.transpose() << "\n";
+				}
+
 
 				std::cout << "APRILTAGS ID: " << det->id <<
 						" x: " << rbs.position.x() <<
@@ -231,13 +261,17 @@ void Task::updateHook()
 						" extract_time: " << t_detect*1000 << " ms" <<
 						std::endl;
 
+				SingleTag sTag;
+				sTag.id = det->id;
 				for (int j=0; j < 4; ++j)
 				{
 					base::Vector2d aux;
 					aux[0] = det->p[j][0];
 					aux[1] = det->p[j][1];
 					corners.push_back(aux);
+					sTag[j] = aux;
 				}
+				timed_tags.push_back(sTag);
 
 
 				if (!conf.quiet)
@@ -257,6 +291,9 @@ void Task::updateHook()
 				apriltag_detection_destroy(det);
 			}
 			zarray_destroy(detections);
+
+			// TODO try to refine corner coordinates
+//			cv::cornerSubPix(image_gray, corners, cv::Size(5,5), cv::Size(-1,-1), cv::TermCriteria(cv::TermCriteria::EPS | cv::TermCriteria::MAX_ITER, 16, 1e-6));
 
 			if (!conf.quiet)
 			{
@@ -287,6 +324,7 @@ void Task::updateHook()
 				_detected_corners.write(corners);
 				corners.clear();
 			}
+			_detected_corners_timed.write(timed_tags);
 
 			//write the markers in the output port
 			if (rbs_vector.size() != 0)
@@ -339,6 +377,7 @@ void Task::cleanupHook()
 
 void Task::getRbs(base::samples::RigidBodyState &rbs, float markerSizeMeters, double points[][2], cv::Mat  camMatrix,cv::Mat distCoeff)throw(cv::Exception)
 {
+//    std::cout << __PRETTY_FUNCTION__ << std::endl;
     if (markerSizeMeters<=0)throw cv::Exception(9004,"markerSize<=0: invalid markerSize","getRbs",__FILE__,__LINE__);
     if (camMatrix.rows==0 || camMatrix.cols==0) throw cv::Exception(9004,"CameraMatrix is empty","getRbs",__FILE__,__LINE__);
 
@@ -384,6 +423,7 @@ void Task::getRbs(base::samples::RigidBodyState &rbs, float markerSizeMeters, do
     base::Matrix3d m;
     cv::cv2eigen(R,m);
     base::Quaterniond quat(m);
+//    std::cout << "Mat-In:\n" << m << std::endl;
 
 
     rbs.orientation = quat;
@@ -423,34 +463,34 @@ void Task::draw(cv::Mat &in, double p[][2], double c[], int id, cv::Scalar color
 
 void Task::draw3dCube(cv::Mat &Image,float marker_size,cv::Mat  camMatrix,cv::Mat distCoeff)
 {
-    cv::Mat objectPoints (8,3,CV_32FC1);
+    cv::Mat_<float> objectPoints (8,3);
     double halfSize=marker_size/2;
 
-      objectPoints.at<float>(0,0)=-halfSize;
-      objectPoints.at<float>(0,1)=-halfSize;
-      objectPoints.at<float>(0,2)=0;
-      objectPoints.at<float>(1,0)=-halfSize;
-      objectPoints.at<float>(1,1)=halfSize;
-      objectPoints.at<float>(1,2)=0;
-      objectPoints.at<float>(2,0)=halfSize;
-      objectPoints.at<float>(2,1)=halfSize;
-      objectPoints.at<float>(2,2)=0;
-      objectPoints.at<float>(3,0)=halfSize;
-      objectPoints.at<float>(3,1)=-halfSize;
-      objectPoints.at<float>(3,2)=0;
+      objectPoints(0,0)=-halfSize;
+      objectPoints(0,1)=-halfSize;
+      objectPoints(0,2)=0;
+      objectPoints(1,0)=-halfSize;
+      objectPoints(1,1)=halfSize;
+      objectPoints(1,2)=0;
+      objectPoints(2,0)=halfSize;
+      objectPoints(2,1)=halfSize;
+      objectPoints(2,2)=0;
+      objectPoints(3,0)=halfSize;
+      objectPoints(3,1)=-halfSize;
+      objectPoints(3,2)=0;
 
-      objectPoints.at<float>(4,0)=-halfSize;
-      objectPoints.at<float>(4,1)=-halfSize;
-      objectPoints.at<float>(4,2)=marker_size;
-      objectPoints.at<float>(5,0)=-halfSize;
-      objectPoints.at<float>(5,1)=halfSize;
-      objectPoints.at<float>(5,2)=marker_size;
-      objectPoints.at<float>(6,0)=halfSize;
-      objectPoints.at<float>(6,1)=halfSize;
-      objectPoints.at<float>(6,2)=marker_size;
-      objectPoints.at<float>(7,0)=halfSize;
-      objectPoints.at<float>(7,1)=-halfSize;
-      objectPoints.at<float>(7,2)=marker_size;
+      objectPoints(4,0)=-halfSize;
+      objectPoints(4,1)=-halfSize;
+      objectPoints(4,2)=marker_size;
+      objectPoints(5,0)=-halfSize;
+      objectPoints(5,1)=halfSize;
+      objectPoints(5,2)=marker_size;
+      objectPoints(6,0)=halfSize;
+      objectPoints(6,1)=halfSize;
+      objectPoints(6,2)=marker_size;
+      objectPoints(7,0)=halfSize;
+      objectPoints(7,1)=-halfSize;
+      objectPoints(7,2)=marker_size;
 
     std::vector<cv::Point2f> imagePoints;
     cv::projectPoints(objectPoints, rvec,tvec,  camMatrix ,distCoeff, imagePoints);
